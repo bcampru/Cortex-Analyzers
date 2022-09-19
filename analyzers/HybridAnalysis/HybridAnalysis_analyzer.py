@@ -22,11 +22,14 @@ from cortexutils.analyzer import Analyzer
 class VxStreamSandboxAnalyzer(Analyzer):
     def __init__(self):
         Analyzer.__init__(self)
-        self.basic_url = 'https://www.hybrid-analysis.com/api/'
-        self.headers = {'User-Agent': 'VxStream'}
+        self.basic_url = 'https://www.hybrid-analysis.com/api/v2'
 
-        self.secret = self.get_param('config.secret', None, 'VxStream Sandbox secret key is missing')
-        self.api_key = self.get_param('config.key', None, 'VxStream Sandbox API key is missing')
+        self.secret = self.get_param(
+            'config.secret', None, 'VxStream Sandbox secret key is missing')
+        self.api_key = self.get_param(
+            'config.key', None, 'VxStream Sandbox API key is missing')
+        self.headers = {'User-Agent': 'VxStream', 'api-key': self.api_key}
+        self.data_type = 'hash'
 
     def summary(self, raw_report):
         taxonomies = []
@@ -38,10 +41,7 @@ class VxStreamSandboxAnalyzer(Analyzer):
         value = "No verdict"
 
         # define json keys to loop
-        if self.data_type in ['hash', 'file']:
-            minireports = raw_report.get('results').get('response')
-        elif self.data_type in ['filename']:
-            minireports = raw_report.get('results').get('response').get('result')
+        minireports = raw_report.get('results')
 
         if len(minireports) != 0:
             # get first report with not Null verdict
@@ -67,48 +67,52 @@ class VxStreamSandboxAnalyzer(Analyzer):
             level = 'info'
             value = "Unknown"
 
-        taxonomies.append(self.build_taxonomy(level, namespace, predicate, value))
+        taxonomies.append(self.build_taxonomy(
+            level, namespace, predicate, value))
         return {"taxonomies": taxonomies}
 
     def run(self):
 
         try:
             if self.data_type == 'hash':
-                query_url = 'scan/'
-                query_data = self.get_param('data', None, 'Hash is missing')
+                query_url = '/search/hash'
+                query_data = {'hash': self.get_param(
+                    'data', None, 'Hash is missing')}
 
             elif self.data_type == 'file':
-                query_url = 'scan/'
+                query_url = '/search/hash'
                 hashes = self.get_param('attachment.hashes', None)
 
                 if hashes is None:
                     filepath = self.get_param('file', None, 'File is missing')
-                    query_data = hashlib.sha256(open(filepath, 'rb').read()).hexdigest()
+                    query_data = {'hash': hashlib.sha256(
+                        open(filepath, 'rb').read()).hexdigest()}
                 else:
                     # find SHA256 hash
-                    query_data = next(h for h in hashes if len(h) == 64)
-
+                    query_data = {'hash': next(
+                        h for h in hashes if len(h) == 64)}
             elif self.data_type == 'filename':
-                query_url = 'search?query=filename:'
-                query_data = '"{}"'.format(self.get_param('data', None, 'Filename is missing'))
+                query_url = '/search/terms'
+                query_data = {'filename': self.get_param(
+                    'data', None, 'Filename is missing')}
             else:
                 self.notSupported()
 
-            url = str(self.basic_url) + str(query_url) + str(query_data)
+            url = str(self.basic_url) + str(query_url)
 
             error = True
             while error:
-                r = requests.get(url, headers=self.headers, auth=HTTPBasicAuth(self.api_key, self.secret), verify=True)
-                if "error" in r.json().get('response'):
-                    if "Exceeded maximum API requests per minute(5)" in r.json().get('response').get('error'):
+                r = requests.post(url, data=query_data, headers=self.headers, auth=HTTPBasicAuth(
+                    self.api_key, self.secret), verify=True)
+                if not r.ok:
+                    if "Exceeded maximum API requests per minute(5)" in r.json().get('message'):
                         time.sleep(60)
                     else:
-                        self.error(r.json().get('response').get('error'))
+                        self.error(r.json().get('message'))
                 else:
                     error = False
 
             self.report({'results': r.json()})
-
         except ValueError as e:
             self.unexpectedError(e)
 
