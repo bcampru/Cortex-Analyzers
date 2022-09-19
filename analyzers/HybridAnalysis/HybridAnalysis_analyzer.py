@@ -15,7 +15,6 @@ import hashlib
 import requests
 import time
 
-from requests.auth import HTTPBasicAuth
 from cortexutils.analyzer import Analyzer
 
 
@@ -23,49 +22,42 @@ class VxStreamSandboxAnalyzer(Analyzer):
     def __init__(self):
         Analyzer.__init__(self)
         self.basic_url = 'https://www.hybrid-analysis.com/api/v2'
-
-        self.secret = self.get_param(
-            'config.secret', None, 'VxStream Sandbox secret key is missing')
         self.api_key = self.get_param(
             'config.key', None, 'VxStream Sandbox API key is missing')
         self.headers = {'User-Agent': 'VxStream', 'api-key': self.api_key}
-        self.data_type = 'hash'
 
     def summary(self, raw_report):
         taxonomies = []
 
         # default values
-        level = "info"
+        report_verdict = 'no specific threat'
         namespace = "HybridAnalysis"
         predicate = "Threat level"
-        value = "No verdict"
+        value = "Unknown"
 
         # define json keys to loop
         minireports = raw_report.get('results')
-
-        if len(minireports) != 0:
+        if 'result' in minireports:
             # get first report with not Null verdict
-            for minireport in minireports:
+            for minireport in minireports.get('result'):
                 if minireport.get('verdict') is not None:
                     report_verdict = minireport.get('verdict')
                     break
-
-            # create shield badge for short.html
-            if report_verdict == 'malicious':
-                level = 'malicious'
-                value = "Malicious"
-            elif report_verdict == 'suspicious':
-                level = 'suspicious'
-                value = "Suspicious"
-            elif report_verdict == 'whitelisted':
-                level = 'safe'
-                value = "Whitelisted"
-            elif report_verdict == 'no specific threat':
-                level = 'info'
-                value = "No Specific Threat"
         else:
+            if minireports.get('verdict') is not None:
+                report_verdict = minireports.get('verdict')
+            if minireports.get('threat_score') is not None:
+                value = minireports.get('threat_score')
+
+        if report_verdict == 'malicious':
+            level = 'malicious'
+        elif report_verdict == 'suspicious':
+            level = 'suspicious'
+        elif report_verdict == 'whitelisted':
+            level = 'safe'
+            value = "Whitelisted"
+        elif report_verdict == 'no specific threat':
             level = 'info'
-            value = "Unknown"
 
         taxonomies.append(self.build_taxonomy(
             level, namespace, predicate, value))
@@ -75,22 +67,36 @@ class VxStreamSandboxAnalyzer(Analyzer):
 
         try:
             if self.data_type == 'hash':
-                query_url = '/search/hash'
-                query_data = {'hash': self.get_param(
-                    'data', None, 'Hash is missing')}
+                hash = self.get_param('data', None, 'Hash is missing')
+                if len(hash) != 64:
+                    query_url = '/search/hash'
+                    query_data = {'hash': hash}
+                    url = str(self.basic_url) + str(query_url)
+                    error = True
+                    while error:
+                        r = requests.post(url, data=query_data,
+                                          headers=self.headers, verify=True)
+                        if not r.ok:
+                            if "Exceeded maximum API requests per minute(5)" in r.json().get('message'):
+                                time.sleep(60)
+                            else:
+                                self.error(r.json().get('message'))
+                        else:
+                            error = False
+                    hash = r.json()[0]['sha256']
+                query_url = '/overview/{}/summary'.format(hash)
 
             elif self.data_type == 'file':
-                query_url = '/search/hash'
                 hashes = self.get_param('attachment.hashes', None)
 
                 if hashes is None:
                     filepath = self.get_param('file', None, 'File is missing')
-                    query_data = {'hash': hashlib.sha256(
-                        open(filepath, 'rb').read()).hexdigest()}
+                    hash = hashlib.sha256(
+                        open(filepath, 'rb').read()).hexdigest()
                 else:
                     # find SHA256 hash
-                    query_data = {'hash': next(
-                        h for h in hashes if len(h) == 64)}
+                    hash = next(h for h in hashes if len(h) == 64)
+                query_url = '/overview/{}/summary'.format(hash)
             elif self.data_type == 'filename':
                 query_url = '/search/terms'
                 query_data = {'filename': self.get_param(
@@ -102,8 +108,11 @@ class VxStreamSandboxAnalyzer(Analyzer):
 
             error = True
             while error:
-                r = requests.post(url, data=query_data, headers=self.headers, auth=HTTPBasicAuth(
-                    self.api_key, self.secret), verify=True)
+                if self.data_type == 'filename':
+                    r = requests.post(url, data=query_data,
+                                      headers=self.headers, verify=True)
+                else:
+                    r = requests.get(url, headers=self.headers, verify=True)
                 if not r.ok:
                     if "Exceeded maximum API requests per minute(5)" in r.json().get('message'):
                         time.sleep(60)
