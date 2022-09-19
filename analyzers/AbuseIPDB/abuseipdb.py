@@ -42,30 +42,37 @@ class AbuseIPDBAnalyzer(Analyzer):
 
         try:
             if self.data_type == "ip":
-                api_key = self.get_param('config.key', None, 'Missing AbuseIPDB API key')
+                api_key = self.get_param(
+                    'config.key', None, 'Missing AbuseIPDB API key')
 
                 days_to_check = self.get_param('config.days', 30)
                 ip = self.get_data()
 
                 url = 'https://api.abuseipdb.com/api/v2/check'
-                headers = {'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'Key': '%s' % api_key }
-                params = {'maxAgeInDays': days_to_check, 'verbose': 'True', 'ipAddress': ip}
-                response = requests.get(url, headers = headers, params = params)
+                headers = {'Accept': 'application/json',
+                           'Content-Type': 'application/x-www-form-urlencoded', 'Key': '%s' % api_key}
+                params = {'maxAgeInDays': days_to_check,
+                          'verbose': 'True', 'ipAddress': ip}
+                response = requests.get(url, headers=headers, params=params)
 
                 if not (200 <= response.status_code < 300):
-                    self.error('Unable to query AbuseIPDB API\n{}'.format(response.text))
+                    self.error(
+                        'Unable to query AbuseIPDB API\n{}'.format(response.text))
 
                 json_response = response.json()
                 # this is because in case there's only one result, the api gives back a list instead of a dict
-                response_list = json_response if isinstance(json_response, list) else [json_response]
+                response_list = json_response if isinstance(
+                    json_response, list) else [json_response]
                 for response in response_list:
                     if 'reports' in response["data"]:
                         categories_strings = []
                         for item in response["data"]["reports"]:
                             item['categories_strings'] = []
                             for category in item["categories"]:
-                                category_as_str = self.extract_abuse_ipdb_category(category)
-                                item['categories_strings'].append(category_as_str)
+                                category_as_str = self.extract_abuse_ipdb_category(
+                                    category)
+                                item['categories_strings'].append(
+                                    category_as_str)
                                 if category_as_str not in categories_strings:
                                     categories_strings.append(category_as_str)
                         response['categories_strings'] = categories_strings
@@ -79,10 +86,12 @@ class AbuseIPDBAnalyzer(Analyzer):
     def summary(self, raw):
         taxonomies = []
 
-        if raw and 'values' in raw and raw['values'][0]['data']['totalReports'] > 0 :
-            taxonomies.append(self.build_taxonomy('malicious', 'AbuseIPDB', 'Records', raw['values'][0]['data']['totalReports']))
+        if raw and 'values' in raw and raw['values'][0]['data']['abuseConfidenceScore'] > 0:
+            taxonomies.append(self.build_taxonomy(
+                'malicious', 'AbuseIPDB', 'Records', raw['values'][0]['data']['abuseConfidenceScore']))
         else:
-            taxonomies.append(self.build_taxonomy('safe', 'AbuseIPDB', 'Records', 0))
+            taxonomies.append(self.build_taxonomy(
+                'safe', 'AbuseIPDB', 'Records', 0))
 
         return {"taxonomies": taxonomies}
 
